@@ -25,6 +25,18 @@ streamlit run app.py
 
 `.env`에서 `HF_TOKEN=hf_새로_발급한_토큰`을 실제 토큰으로 바꾸세요.
 
+
+## YouTube URL 입력 방식
+
+YouTube 분석 탭에서는 아래 입력을 지원합니다.
+
+- 일반 URL: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`
+- Shorts URL: `https://www.youtube.com/shorts/dQw4w9WgXcQ`
+- 단축 URL: `https://youtu.be/dQw4w9WgXcQ`
+- 영상 ID만 입력: `dQw4w9WgXcQ`
+
+`https://www.youtube.com/watch?v=여기에_유튜브_ID_입력` 같은 예시 placeholder는 자동 차단됩니다.
+
 ## Streamlit Cloud 배포
 
 1. GitHub 저장소에 이 폴더 전체를 업로드합니다.

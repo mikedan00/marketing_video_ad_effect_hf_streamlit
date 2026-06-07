@@ -1,8 +1,11 @@
 import json
 import os
-import subprocess
+import re
 import tempfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+import yt_dlp
 
 import pandas as pd
 import streamlit as st
@@ -49,22 +52,64 @@ def analyze_video(video_path: str, filename: str, context: str, n_frames: int, s
     }
 
 
+PLACEHOLDER_URL_MARKERS = [
+    "여기에_유튜브_ID_입력",
+    "youtube_id",
+    "VIDEO_ID",
+    "example.com",
+]
+
+
+def normalize_youtube_url(raw_url: str) -> str:
+    """사용자 입력값을 yt-dlp가 처리 가능한 YouTube URL로 정규화한다."""
+    value = (raw_url or "").strip()
+    if not value:
+        raise ValueError("YouTube URL을 입력하세요.")
+
+    if any(marker.lower() in value.lower() for marker in PLACEHOLDER_URL_MARKERS):
+        raise ValueError("예시/placeholder URL이 아니라 실제 YouTube 영상 URL을 입력하세요.")
+
+    # 영상 ID만 입력한 경우: dQw4w9WgXcQ 형태
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
+        return f"https://www.youtube.com/watch?v={value}"
+
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("올바른 URL 형식이 아닙니다. 예: https://www.youtube.com/watch?v=영상ID")
+
+    host = parsed.netloc.lower().replace("www.", "")
+    allowed_hosts = {"youtube.com", "m.youtube.com", "youtu.be", "youtube-nocookie.com", "music.youtube.com"}
+    if host not in allowed_hosts:
+        raise ValueError("현재 YouTube URL만 지원합니다. YouTube watch/shorts/youtu.be 링크를 입력하세요.")
+
+    # 일반 watch URL 검증
+    if "youtube.com" in host and parsed.path == "/watch":
+        video_id = parse_qs(parsed.query).get("v", [""])[0]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            raise ValueError("YouTube watch URL의 v=영상ID 값을 확인하세요.")
+
+    return value
+
+
 def download_youtube_video(url: str) -> str:
+    normalized_url = normalize_youtube_url(url)
     tmpdir = tempfile.mkdtemp()
     out_template = str(Path(tmpdir) / "yt_video.%(ext)s")
-    cmd = [
-        "yt-dlp",
-        "-f",
-        "mp4[height<=720]/best[height<=720]",
-        "-o",
-        out_template,
-        "--no-playlist",
-        url,
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0:
-        raise RuntimeError(res.stderr[-1000:] or "yt-dlp 다운로드 실패")
-    files = list(Path(tmpdir).glob("yt_video.*"))
+    ydl_opts = {
+        "format": "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/best[height<=720]/best",
+        "outtmpl": out_template,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "merge_output_format": "mp4",
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([normalized_url])
+    except Exception as exc:
+        raise RuntimeError(str(exc)[-1200:] or "yt-dlp 다운로드 실패") from exc
+
+    files = sorted(Path(tmpdir).glob("yt_video.*"), key=lambda x: x.stat().st_size, reverse=True)
     if not files:
         raise RuntimeError("다운로드된 파일을 찾을 수 없습니다.")
     return str(files[0])
@@ -140,13 +185,26 @@ with tab1:
 with tab2:
     st.subheader("YouTube URL 분석")
     st.warning("YouTube 다운로드는 영상 소유권/이용약관/저작권을 확인한 뒤 사용하세요.")
-    url = st.text_input("YouTube URL")
+    url = st.text_input(
+        "YouTube 영상 URL 또는 영상 ID",
+        value="",
+        placeholder="예: https://www.youtube.com/watch?v=dQw4w9WgXcQ 또는 dQw4w9WgXcQ",
+        help="watch URL, shorts URL, youtu.be 단축 URL, 11자리 영상 ID를 지원합니다. 예시 placeholder를 그대로 입력하면 실행하지 않습니다.",
+    )
     yt_context = st.text_area("광고 컨텍스트", value=default_context, height=110, key="yt_context")
 
-    if url and st.button("YouTube 영상 다운로드 및 분석", type="primary"):
+    run_youtube = st.button("YouTube 영상 다운로드 및 분석", type="primary", disabled=not bool(url.strip()))
+    if run_youtube:
+        try:
+            normalized_url = normalize_youtube_url(url)
+        except Exception as exc:
+            st.error(f"URL 확인 필요: {exc}")
+            st.stop()
+
+        st.info(f"분석 대상 URL: {normalized_url}")
         with st.spinner("YouTube 영상 다운로드 중..."):
             try:
-                video_path = download_youtube_video(url)
+                video_path = download_youtube_video(normalized_url)
             except Exception as exc:
                 st.error(f"YouTube 다운로드 실패: {exc}")
                 st.stop()
